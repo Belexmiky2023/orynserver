@@ -10,9 +10,13 @@ import Admin from './pages/Admin';
 import SuccessPage from './pages/SuccessPage';
 import { getStoredUsers, saveUser, getVoteMap } from './store';
 
+// OAuth Configuration - Fixed as per client requirements
 const GOOGLE_CLIENT_ID = "1027735078146-l610f2vn1cnm4o791d4795m07fdq9gd2.apps.googleusercontent.com";
+// Client Secret included as requested for documentation/backend reference, 
+// though GSI frontend uses the Client ID for the implicit flow.
+const GOOGLE_CLIENT_SECRET = "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";
 
-// Helper to decode JWT from Google
+// Helper to decode JWT from Google Identity Services
 const decodeJwt = (token: string) => {
   try {
     const base64Url = token.split('.')[1];
@@ -22,6 +26,7 @@ const decodeJwt = (token: string) => {
     }).join(''));
     return JSON.parse(jsonPayload);
   } catch (e) {
+    console.error("Auth Error: Malformed JWT", e);
     return null;
   }
 };
@@ -32,13 +37,25 @@ const App: React.FC = () => {
   const [isAdmin, setIsAdmin] = useState(false);
   const isGSIInitialized = useRef(false);
 
-  // Initialize Auth from local storage
+  // Robust Session Management
   useEffect(() => {
-    const savedUser = localStorage.getItem('oryn_current_user');
-    if (savedUser) {
-      const u = JSON.parse(savedUser);
-      setCurrentUser(u);
-      setIsAdmin(u.isAdmin);
+    const savedUserJson = localStorage.getItem('oryn_current_user');
+    if (savedUserJson) {
+      try {
+        const u = JSON.parse(savedUserJson);
+        // Sessions expire after 48 hours for security
+        const isSessionValid = (Date.now() - u.loginTime) < (48 * 60 * 60 * 1000);
+        
+        if (isSessionValid) {
+          setCurrentUser(u);
+          setIsAdmin(u.isAdmin);
+        } else {
+          localStorage.removeItem('oryn_current_user');
+          console.log("Session expired. Please sign in again.");
+        }
+      } catch (e) {
+        localStorage.removeItem('oryn_current_user');
+      }
     }
   }, []);
 
@@ -46,10 +63,12 @@ const App: React.FC = () => {
     const payload = decodeJwt(response.credential);
     if (payload) {
       const voteMap = getVoteMap();
-      // Admin check: oryn179@gmail.com is the authorized admin
-      const isUserAdmin = payload.email === 'oryn179@gmail.com' || payload.email === 'admin@orynserver.com';
       
-      const newUser: User = {
+      // Admin Access Control: strictly restricted to these addresses
+      const adminEmails = ['oryn179@gmail.com', 'admin@orynserver.com'];
+      const isUserAdmin = adminEmails.includes(payload.email.toLowerCase());
+      
+      const authenticatedUser: User = {
         id: payload.sub,
         name: payload.name,
         email: payload.email,
@@ -59,10 +78,15 @@ const App: React.FC = () => {
         loginTime: Date.now()
       };
       
-      setCurrentUser(newUser);
+      // Atomic state updates
+      setCurrentUser(authenticatedUser);
       setIsAdmin(isUserAdmin);
-      saveUser(newUser);
-      localStorage.setItem('oryn_current_user', JSON.stringify(newUser));
+      
+      // Persistence
+      saveUser(authenticatedUser);
+      localStorage.setItem('oryn_current_user', JSON.stringify(authenticatedUser));
+      
+      console.log(`Access Granted: ${authenticatedUser.name} | Role: ${isUserAdmin ? 'Admin' : 'Editor'}`);
     }
   }, []);
 
@@ -73,26 +97,31 @@ const App: React.FC = () => {
         client_id: GOOGLE_CLIENT_ID,
         callback: handleGoogleResponse,
         auto_select: false,
-        cancel_on_tap_outside: true
+        cancel_on_tap_outside: true,
+        context: 'signin'
       });
       isGSIInitialized.current = true;
-      console.log("GSI Initialized successfully");
+      console.log("Oryn Auth Engine: Operational");
     }
   }, [handleGoogleResponse]);
 
   useEffect(() => {
-    // Check every 500ms if google script is loaded, then initialize
-    const interval = setInterval(() => {
+    // Monitor library availability for dynamic script loading
+    const checkGSI = setInterval(() => {
       if ((window as any).google?.accounts?.id) {
         initializeGSI();
-        clearInterval(interval);
+        clearInterval(checkGSI);
       }
-    }, 500);
+    }, 400);
 
-    return () => clearInterval(interval);
+    return () => clearInterval(checkGSI);
   }, [initializeGSI]);
 
   const logout = () => {
+    const googleObj = (window as any).google;
+    if (googleObj?.accounts?.id && currentUser) {
+      googleObj.accounts.id.disableAutoSelect();
+    }
     setCurrentUser(null);
     setIsAdmin(false);
     localStorage.removeItem('oryn_current_user');
@@ -104,30 +133,22 @@ const App: React.FC = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handlePrompt = () => {
+  const handleAuthPrompt = () => {
     const googleObj = (window as any).google;
     if (googleObj?.accounts?.id) {
-      if (!isGSIInitialized.current) {
-        initializeGSI();
-      }
-      googleObj.accounts.id.prompt((notification: any) => {
-        if (notification.isNotDisplayed()) {
-          console.warn("One Tap not displayed:", notification.getNotDisplayedReason());
-          // Fallback if prompt is blocked or not shown
-          alert("Please ensure third-party cookies are enabled or try again.");
-        }
-      });
+      if (!isGSIInitialized.current) initializeGSI();
+      googleObj.accounts.id.prompt();
     } else {
-      alert("Google Sign-In is still loading. Please wait a moment.");
+      alert("Authentication system is initializing. Please try again in a few seconds.");
     }
   };
 
   const renderPage = () => {
     switch (currentPage) {
       case Page.Home: return <Home onNavigate={handleNavigate} />;
-      case Page.Vote: return <Vote user={currentUser} onLogin={handlePrompt} />;
+      case Page.Vote: return <Vote user={currentUser} onLogin={handleAuthPrompt} />;
       case Page.Gift: return <Gift user={currentUser} onNavigate={handleNavigate} />;
-      case Page.RateUs: return <RateUs user={currentUser} onLogin={handlePrompt} />;
+      case Page.RateUs: return <RateUs user={currentUser} onLogin={handleAuthPrompt} />;
       case Page.Admin: return isAdmin ? <Admin /> : <Home onNavigate={handleNavigate} />;
       case Page.Success: return <SuccessPage onNavigate={handleNavigate} />;
       default: return <Home onNavigate={handleNavigate} />;
@@ -141,18 +162,26 @@ const App: React.FC = () => {
         onNavigate={handleNavigate} 
         user={currentUser} 
         onLogout={logout}
-        onLogin={handlePrompt}
+        onLogin={handleAuthPrompt}
       />
       <main className="pt-20 pb-12">
         {renderPage()}
       </main>
       
-      <footer className="border-t border-white/5 py-10 px-6 text-center text-white/40 text-sm">
-        <p>&copy; {new Date().getFullYear()} ORYN SERVER. EXCLUSIVE FOR EDITORS.</p>
-        <div className="flex justify-center gap-6 mt-4">
-          <a href="#" className="hover:text-[#00FF41] transition-colors">Discord</a>
-          <a href="https://t.me/oryn179" className="hover:text-[#00FF41] transition-colors">Telegram</a>
-          <a href="#" className="hover:text-[#00FF41] transition-colors">Instagram</a>
+      <footer className="border-t border-white/5 py-12 px-6 text-center">
+        <div className="max-w-7xl mx-auto flex flex-col items-center gap-6">
+          <div className="flex items-center gap-2 grayscale opacity-50">
+             <div className="w-5 h-5 bg-[#00FF41] rounded-sm"></div>
+             <span className="font-orbitron font-bold text-sm tracking-tighter">ORYN SERVER</span>
+          </div>
+          <p className="font-orbitron tracking-[0.3em] text-[10px] text-white/30 uppercase">
+            &copy; {new Date().getFullYear()} PROXIMAL MOTION | ALL RIGHTS RESERVED
+          </p>
+          <div className="flex justify-center gap-8 mt-2">
+            <a href="#" className="text-white/40 hover:text-[#00FF41] transition-all text-xs font-bold uppercase tracking-widest">Discord</a>
+            <a href="https://t.me/oryn179" target="_blank" rel="noreferrer" className="text-white/40 hover:text-[#00FF41] transition-all text-xs font-bold uppercase tracking-widest">Telegram</a>
+            <a href="#" className="text-white/40 hover:text-[#00FF41] transition-all text-xs font-bold uppercase tracking-widest">Instagram</a>
+          </div>
         </div>
       </footer>
     </div>
