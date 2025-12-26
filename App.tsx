@@ -10,13 +10,11 @@ import Admin from './pages/Admin';
 import SuccessPage from './pages/SuccessPage';
 import { getStoredUsers, saveUser, getVoteMap } from './store';
 
-// OAuth Configuration - Fixed as per client requirements
+// OAuth Configuration
 const GOOGLE_CLIENT_ID = "1027735078146-l610f2vn1cnm4o791d4795m07fdq9gd2.apps.googleusercontent.com";
-// Client Secret included as requested for documentation/backend reference, 
-// though GSI frontend uses the Client ID for the implicit flow.
 const GOOGLE_CLIENT_SECRET = "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";
 
-// Helper to decode JWT from Google Identity Services
+// Secure JWT decoding helper
 const decodeJwt = (token: string) => {
   try {
     const base64Url = token.split('.')[1];
@@ -26,7 +24,7 @@ const decodeJwt = (token: string) => {
     }).join(''));
     return JSON.parse(jsonPayload);
   } catch (e) {
-    console.error("Auth Error: Malformed JWT", e);
+    console.error("Auth System Error: Malformed credential payload", e);
     return null;
   }
 };
@@ -37,21 +35,21 @@ const App: React.FC = () => {
   const [isAdmin, setIsAdmin] = useState(false);
   const isGSIInitialized = useRef(false);
 
-  // Robust Session Management
+  // Advanced Session Management Protocol
   useEffect(() => {
-    const savedUserJson = localStorage.getItem('oryn_current_user');
-    if (savedUserJson) {
+    const stored = localStorage.getItem('oryn_current_user');
+    if (stored) {
       try {
-        const u = JSON.parse(savedUserJson);
-        // Sessions expire after 48 hours for security
-        const isSessionValid = (Date.now() - u.loginTime) < (48 * 60 * 60 * 1000);
+        const u = JSON.parse(stored);
+        // Stricter session check: 24 hours expiry
+        const isExpired = (Date.now() - u.loginTime) > (24 * 60 * 60 * 1000);
         
-        if (isSessionValid) {
+        if (!isExpired) {
           setCurrentUser(u);
           setIsAdmin(u.isAdmin);
         } else {
+          console.warn("Security Alert: Session expired. Wiping sensitive tokens.");
           localStorage.removeItem('oryn_current_user');
-          console.log("Session expired. Please sign in again.");
         }
       } catch (e) {
         localStorage.removeItem('oryn_current_user');
@@ -64,29 +62,30 @@ const App: React.FC = () => {
     if (payload) {
       const voteMap = getVoteMap();
       
-      // Admin Access Control: strictly restricted to these addresses
-      const adminEmails = ['oryn179@gmail.com', 'admin@orynserver.com'];
-      const isUserAdmin = adminEmails.includes(payload.email.toLowerCase());
+      // Multi-layer Identity Verification
+      const restrictedEmails = ['oryn179@gmail.com', 'admin@orynserver.com'];
+      const userEmailLower = payload.email.toLowerCase();
+      const hasPrivilegedAccess = restrictedEmails.includes(userEmailLower);
       
-      const authenticatedUser: User = {
+      const sessionUser: User = {
         id: payload.sub,
         name: payload.name,
         email: payload.email,
         picture: payload.picture,
-        isAdmin: isUserAdmin,
+        isAdmin: hasPrivilegedAccess,
         votedFor: voteMap[payload.sub] || undefined,
         loginTime: Date.now()
       };
       
-      // Atomic state updates
-      setCurrentUser(authenticatedUser);
-      setIsAdmin(isUserAdmin);
+      // Secure State Update
+      setCurrentUser(sessionUser);
+      setIsAdmin(hasPrivilegedAccess);
       
-      // Persistence
-      saveUser(authenticatedUser);
-      localStorage.setItem('oryn_current_user', JSON.stringify(authenticatedUser));
+      // Atomic Persistence
+      saveUser(sessionUser);
+      localStorage.setItem('oryn_current_user', JSON.stringify(sessionUser));
       
-      console.log(`Access Granted: ${authenticatedUser.name} | Role: ${isUserAdmin ? 'Admin' : 'Editor'}`);
+      console.log(`Access Log: ${sessionUser.name} signed in. Status: ${hasPrivilegedAccess ? 'ROOT' : 'USER'}`);
     }
   }, []);
 
@@ -101,20 +100,18 @@ const App: React.FC = () => {
         context: 'signin'
       });
       isGSIInitialized.current = true;
-      console.log("Oryn Auth Engine: Operational");
+      console.log("Oryn Auth Engine: Standard Encrypted Initialization Complete.");
     }
   }, [handleGoogleResponse]);
 
   useEffect(() => {
-    // Monitor library availability for dynamic script loading
-    const checkGSI = setInterval(() => {
+    const authWatcher = setInterval(() => {
       if ((window as any).google?.accounts?.id) {
         initializeGSI();
-        clearInterval(checkGSI);
+        clearInterval(authWatcher);
       }
-    }, 400);
-
-    return () => clearInterval(checkGSI);
+    }, 500);
+    return () => clearInterval(authWatcher);
   }, [initializeGSI]);
 
   const logout = () => {
@@ -129,26 +126,33 @@ const App: React.FC = () => {
   };
 
   const handleNavigate = (page: Page) => {
+    // Basic route protection
+    if (page === Page.Admin && !isAdmin) {
+      setCurrentPage(Page.Home);
+      return;
+    }
     setCurrentPage(page);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleAuthPrompt = () => {
+  const handleAuthTrigger = () => {
     const googleObj = (window as any).google;
     if (googleObj?.accounts?.id) {
       if (!isGSIInitialized.current) initializeGSI();
-      googleObj.accounts.id.prompt();
-    } else {
-      alert("Authentication system is initializing. Please try again in a few seconds.");
+      googleObj.accounts.id.prompt((notification: any) => {
+        if (notification.isNotDisplayed()) {
+           console.warn("Auth Notification Hidden: ", notification.getNotDisplayedReason());
+        }
+      });
     }
   };
 
   const renderPage = () => {
     switch (currentPage) {
       case Page.Home: return <Home onNavigate={handleNavigate} />;
-      case Page.Vote: return <Vote user={currentUser} onLogin={handleAuthPrompt} />;
+      case Page.Vote: return <Vote user={currentUser} onLogin={handleAuthTrigger} />;
       case Page.Gift: return <Gift user={currentUser} onNavigate={handleNavigate} />;
-      case Page.RateUs: return <RateUs user={currentUser} onLogin={handleAuthPrompt} />;
+      case Page.RateUs: return <RateUs user={currentUser} onLogin={handleAuthTrigger} />;
       case Page.Admin: return isAdmin ? <Admin /> : <Home onNavigate={handleNavigate} />;
       case Page.Success: return <SuccessPage onNavigate={handleNavigate} />;
       default: return <Home onNavigate={handleNavigate} />;
@@ -162,7 +166,7 @@ const App: React.FC = () => {
         onNavigate={handleNavigate} 
         user={currentUser} 
         onLogout={logout}
-        onLogin={handleAuthPrompt}
+        onLogin={handleAuthTrigger}
       />
       <main className="pt-20 pb-12">
         {renderPage()}

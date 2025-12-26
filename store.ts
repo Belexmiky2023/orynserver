@@ -1,12 +1,13 @@
 
-import { User, Editor, Transaction, Rating } from './types';
+import { User, Editor, Transaction, Rating, AuditEntry } from './types';
 
 const STORAGE_KEYS = {
   USERS: 'oryn_users',
   EDITORS: 'oryn_editors',
   TRANSACTIONS: 'oryn_transactions',
   RATINGS: 'oryn_ratings',
-  VOTES: 'oryn_votes_map' // userId -> editorId
+  VOTES: 'oryn_votes_map',
+  AUDIT: 'oryn_security_audit'
 };
 
 // Initial Data
@@ -31,9 +32,28 @@ export const getStoredEditors = (): Editor[] => {
   return data ? JSON.parse(data) : DEFAULT_EDITORS;
 };
 
-export const saveEditors = (editors: Editor[]) => {
+export const saveEditors = (editors: Editor[], admin?: User, actionDetail?: string) => {
   localStorage.setItem(STORAGE_KEYS.EDITORS, JSON.stringify(editors));
+  if (admin && actionDetail) {
+    logSecurityAction(admin, actionDetail, 'Editors Table');
+  }
 };
+
+export const logSecurityAction = (admin: User, action: string, target: string) => {
+  const logs = getAuditLogs();
+  const entry: AuditEntry = {
+    id: Math.random().toString(36).substr(2, 9),
+    adminId: admin.id,
+    adminName: admin.name,
+    action,
+    target,
+    timestamp: Date.now()
+  };
+  logs.unshift(entry);
+  localStorage.setItem(STORAGE_KEYS.AUDIT, JSON.stringify(logs.slice(0, 100))); // Keep last 100
+};
+
+export const getAuditLogs = (): AuditEntry[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.AUDIT) || '[]');
 
 export const getStoredTransactions = (): Transaction[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.TRANSACTIONS) || '[]');
 export const saveTransaction = (tx: Transaction) => {

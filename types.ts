@@ -18,6 +18,15 @@ export interface Editor {
   videoUrl: string;
 }
 
+export interface AuditEntry {
+  id: string;
+  adminId: string;
+  adminName: string;
+  action: string;
+  target: string;
+  timestamp: number;
+}
+
 export interface GiftPackage {
   id: string;
   name: string;
