@@ -1,0 +1,8 @@
+{
+  "name": "Oryn Server - Editor Tournament",
+  "description": "A premium tournament platform for video editors with high-end neon aesthetics, Google OAuth voting, and a secure admin dashboard.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
